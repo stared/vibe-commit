@@ -27,17 +27,12 @@ Activate when the user:
    ```
    If nothing is staged, run `git diff` to see unstaged changes and ask if the user wants to stage them.
 
-3. **Get Session ID**: Find the current Claude Code session ID:
+3. **Get Session Info**: Run to get session ID, agent, and model:
    ```bash
-   ls -t ~/.claude/projects/`pwd | tr '/_' '--'`/[0-9a-f]*.jsonl 2>/dev/null | head -1 | xargs -I{} basename {} .jsonl
+   uv run ai-blame.py session-info
    ```
 
-4. **Get Version**: Get Claude Code version:
-   ```bash
-   claude --version | head -1
-   ```
-
-5. **Generate Commit Message**: Create a commit message in this format:
+4. **Generate Commit Message**: Create a commit message in this format:
    ```
    <brief summary of changes>
 
@@ -46,14 +41,12 @@ Activate when the user:
    - "<second user prompt>"
    - ...
 
-   AI-Session-ID: <session-id-from-step-3>
-   AI Agent: Claude Code <version> <noreply@anthropic.com>
-   Model: <model>
+   AI-Session-ID: <from session-info>
+   AI Agent: <from session-info>
+   Model: <from session-info>
    ```
 
-   Use the version from step 4 and include the model you are currently running as (e.g., claude-opus-4-5-20251101).
-
-6. **Execute Commit**: Use a HEREDOC to ensure proper formatting:
+5. **Execute Commit**: Use a HEREDOC to ensure proper formatting:
    ```bash
    git add -A && git commit -m "$(cat <<'EOF'
    <your commit message here>

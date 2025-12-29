@@ -308,6 +308,50 @@ def blame(
 
 
 @app.command()
+def session_info():
+    """Output current session ID and Claude version for commits."""
+    claude_dir = Path.home() / ".claude" / "projects"
+    project_path = claude_dir / get_project_dir()
+
+    session_id = None
+    session_file = None
+    model = "unknown"
+
+    if project_path.exists():
+        sessions = [(f.stat().st_mtime, f) for f in project_path.glob("*.jsonl") if not f.stem.startswith("agent-")]
+        if sessions:
+            sessions.sort(reverse=True)
+            session_file = sessions[0][1]
+            session_id = session_file.stem
+
+            # Get model from session file
+            with open(session_file, "r") as f:
+                for line in f:
+                    if '"model":' in line:
+                        try:
+                            entry = json.loads(line)
+                            msg = entry.get("message", {})
+                            if "model" in msg:
+                                model = msg["model"]
+                                break
+                        except json.JSONDecodeError:
+                            continue
+
+    # Get version
+    try:
+        result = subprocess.run(["claude", "--version"], capture_output=True, text=True, check=True)
+        version = result.stdout.strip().split()[0]
+    except (subprocess.CalledProcessError, IndexError):
+        version = "unknown"
+
+    # Output
+    if session_id:
+        console.print(f"AI-Session-ID: {session_id}")
+    console.print(f"AI Agent: Claude Code {version} <noreply@anthropic.com>")
+    console.print(f"Model: {model}")
+
+
+@app.command()
 def list_sessions(
     limit: int = typer.Option(10, "--limit", "-n", help="Max sessions to show"),
 ):
