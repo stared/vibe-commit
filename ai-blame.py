@@ -74,13 +74,45 @@ def get_commit_info(commit: str) -> dict:
     """Get commit metadata."""
     try:
         result = subprocess.run(
-            ["git", "log", "-1", "--format=%H%n%s%n%an%n%ai", commit],
+            ["git", "log", "-1", "--format=%H%n%s%n%an%n%aI", commit],
             capture_output=True, text=True, check=True,
         )
         lines = result.stdout.strip().split("\n")
         return {"hash": lines[0], "subject": lines[1], "author": lines[2], "date": lines[3]}
     except subprocess.CalledProcessError:
         return {}
+
+
+def get_commit_timestamp(commit: str) -> Optional[datetime]:
+    """Get commit timestamp as datetime."""
+    try:
+        result = subprocess.run(
+            ["git", "log", "-1", "--format=%aI", commit],
+            capture_output=True, text=True, check=True,
+        )
+        return datetime.fromisoformat(result.stdout.strip())
+    except (subprocess.CalledProcessError, ValueError):
+        return None
+
+
+def get_previous_commit(commit: str) -> Optional[str]:
+    """Get the previous commit hash, or None if first commit."""
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", f"{commit}^"],
+            capture_output=True, text=True, check=True,
+        )
+        return result.stdout.strip()
+    except subprocess.CalledProcessError:
+        return None
+
+
+def parse_timestamp(ts: str) -> Optional[datetime]:
+    """Parse ISO timestamp string to datetime."""
+    try:
+        return datetime.fromisoformat(ts.replace("Z", "+00:00"))
+    except (ValueError, AttributeError):
+        return None
 
 
 def get_commit_stats(commit: str) -> dict:
@@ -208,7 +240,7 @@ def format_diff(added: int, deleted: int) -> Text:
 def blame(
     commit: str = typer.Argument("HEAD", help="Commit hash or reference"),
     responses: bool = typer.Option(False, "--responses", "-r", help="Include AI responses"),
-    files_only: bool = typer.Option(False, "--files-only", "-f", help="Only prompts with file changes"),
+    all_prompts: bool = typer.Option(False, "--all", "-a", help="Show all prompts from session, not just time-windowed"),
 ):
     """Show AI conversation context for a git commit."""
     commit_info = get_commit_info(commit)
@@ -225,6 +257,11 @@ def blame(
     if not session_file:
         console.print(f"[red]Error:[/red] Session file not found: {session_id}")
         raise typer.Exit(1)
+
+    # Get time window for this commit
+    commit_time = get_commit_timestamp(commit)
+    prev_commit = get_previous_commit(commit)
+    prev_time = get_commit_timestamp(prev_commit) if prev_commit else None
 
     commit_stats = get_commit_stats(commit)
     messages = parse_session(session_file, responses)
@@ -268,10 +305,16 @@ def blame(
     prompt_num = 0
     for msg in messages:
         if msg["type"] == "prompt":
-            # Only count files that are in this commit
-            files = [f for f in msg.get("files_changed", []) if f in commit_stats]
-            if files_only and not files:
-                continue
+            # Time-based filtering: show prompts between previous commit and this commit
+            if not all_prompts and commit_time:
+                msg_time = parse_timestamp(msg["timestamp"])
+                if msg_time:
+                    # Skip if after this commit
+                    if msg_time > commit_time:
+                        continue
+                    # Skip if before or at previous commit time
+                    if prev_time and msg_time <= prev_time:
+                        continue
 
             prompt_num += 1
             time_str = format_time(msg["timestamp"])
@@ -285,7 +328,8 @@ def blame(
             # Content: plain text, no markup interpretation
             console.print(Text(msg["content"], style="white"))
 
-            # Files changed (only those in this commit)
+            # Files changed (only those in this commit, for reference)
+            files = [f for f in msg.get("files_changed", []) if f in commit_stats]
             if files:
                 for f in files:
                     file_line = Text()
