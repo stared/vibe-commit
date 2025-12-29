@@ -21,23 +21,26 @@ You are creating a git commit that includes all user prompts from the current co
    ls -t ~/.claude/projects/`pwd | tr '/_' '--'`/[0-9a-f]*.jsonl 2>/dev/null | head -1 | xargs -I{} basename {} .jsonl
    ```
 
-4. **Generate Commit Message**: Create a commit message in this format:
+4. **Get Version**: Get Claude Code version:
+   ```bash
+   claude --version | head -1
+   ```
+
+5. **Generate Commit Message**: Create a commit message in this format:
    ```
    <brief summary of changes>
 
-   User prompts:
+   Prompts for Claude Code <version> using <model>:
    - "<first user prompt>"
    - "<second user prompt>"
    - ...
 
    AI-Session-ID: <session-id-from-step-3>
-
-   🤖 Generated with [Claude Code](https://claude.com/claude-code)
-
-   Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
    ```
 
-5. **Execute Commit**: Use a HEREDOC to ensure proper formatting:
+   Use the version from step 4 and include the model you are currently running as (e.g., claude-opus-4-5-20251101).
+
+6. **Execute Commit**: Use a HEREDOC to ensure proper formatting:
    ```bash
    git add -A && git commit -m "$(cat <<'EOF'
    <your commit message here>
