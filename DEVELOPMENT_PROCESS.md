@@ -4,19 +4,22 @@
 
 All commits include:
 - Summary of changes
-- User prompts that led to changes (with Claude Code version and model)
+- User prompts that led to changes
 - AI Session ID (for linking to full conversation transcript)
+- AI Agent and Model information
 
 ### Example Commit Message
 
 ```
 Add user authentication
 
-Prompts for Claude Code 2.0.76 using claude-opus-4-5-20251101:
+User prompts:
 - "Add login form with email/password"
 - "Also add password reset functionality"
 
 AI-Session-ID: cbb2adaa-7132-4913-b345-03320f9a044c
+AI Agent: Claude Code 2.0.76 <noreply@anthropic.com>
+Model: claude-opus-4-5-20251101
 ```
 
 ## Session Transcripts

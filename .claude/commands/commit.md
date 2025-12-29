@@ -30,12 +30,14 @@ You are creating a git commit that includes all user prompts from the current co
    ```
    <brief summary of changes>
 
-   Prompts for Claude Code <version> using <model>:
+   User prompts:
    - "<first user prompt>"
    - "<second user prompt>"
    - ...
 
    AI-Session-ID: <session-id-from-step-3>
+   AI Agent: Claude Code <version> <noreply@anthropic.com>
+   Model: <model>
    ```
 
    Use the version from step 4 and include the model you are currently running as (e.g., claude-opus-4-5-20251101).
