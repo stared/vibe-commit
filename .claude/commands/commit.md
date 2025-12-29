@@ -52,9 +52,14 @@ You are creating a git commit that includes all user prompts from the current co
 
 ## Rules for User Prompts
 - Only include prompts that led to actual file changes (not `/commit` commands or meta-discussion)
-- Keep the summary line under 50 characters
 - Preserve the exact wording of user prompts (can abbreviate very long ones with "...")
 - If there are no staged changes, inform the user instead of creating an empty commit
+
+## Line Length Rules
+- **Summary line**: Keep under 50 characters (GitHub truncates at ~72)
+- **Body**: No limit - GitHub soft-wraps automatically in browser
+- **Each prompt**: Write as a single line, no mid-sentence wrapping
+- Only use line breaks between items, not within them
 
 ## Session Transcripts
 The full conversation transcript is stored at:

@@ -54,3 +54,10 @@ git log --show-notes
 1. **Exclude meta-commands**: Don't include `/commit` itself as it doesn't affect file changes
 2. **Only include prompts that led to actual changes**: Focus on user requests that resulted in code/file modifications
 3. **Avoid repetition**: Don't list the same command multiple times
+
+## Line Length Rules
+
+- **Summary line**: Keep under 50 characters (GitHub truncates at ~72)
+- **Body**: No limit - GitHub soft-wraps automatically in browser
+- **Each prompt**: Write as a single line, no mid-sentence wrapping
+- Only use line breaks between items, not within them
