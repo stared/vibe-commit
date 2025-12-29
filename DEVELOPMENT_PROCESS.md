@@ -1,29 +1,58 @@
 # Development Process Notes
 
-## Commit Message Guidelines
+## Commit Message Format
 
-When using `/commit` with user prompt tracking:
+All commits include:
+- Summary of changes
+- User prompts that led to changes (excluding `/commit` and meta-commands)
+- AI Session ID (for linking to full conversation transcript)
+- Co-author attribution
+
+### Example Commit Message
+
+```
+Add user authentication
+
+User prompts:
+- "Add login form with email/password"
+- "Also add password reset functionality"
+
+AI-Session-ID: cbb2adaa-7132-4913-b345-03320f9a044c
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
+```
+
+## Session Transcripts
+
+Full conversation transcripts are stored locally at:
+```
+~/.claude/projects/<encoded-project-path>/<session-id>.jsonl
+```
+
+The session ID in commit messages allows you to find and review the full conversation that led to the changes.
+
+## Git Notes for Important Changes
+
+For significant changes, attach additional context using git notes:
+
+```bash
+# After committing, attach context:
+git notes add -m "Key decisions: Used JWT for auth, React Query for state..."
+
+# Or reference the full transcript:
+git notes add -m "Full transcript: ~/.claude/projects/-Users-pmigdal-my-repos-quesma-vibe-coding/cbb2adaa-7132-4913-b345-03320f9a044c.jsonl"
+
+# Push notes to remote:
+git push origin refs/notes/*
+
+# View notes:
+git log --show-notes
+```
+
+## Guidelines
 
 1. **Exclude meta-commands**: Don't include `/commit` itself as it doesn't affect file changes
 2. **Only include prompts that led to actual changes**: Focus on user requests that resulted in code/file modifications
 3. **Avoid repetition**: Don't list the same command multiple times
-
-### Example
-
-Bad:
-```
-User prompts:
-- "/commit"
-- "My bad, I created it in a wrong folder."
-- "I moved them out. Check again"
-- "Yes" (to add .DS_Store to .gitignore)
-- "/commit"
-```
-
-Good:
-```
-User prompts:
-- "Yes" (to add .DS_Store to .gitignore)
-```
-
-The good version only includes prompts that directly resulted in file changes being committed.

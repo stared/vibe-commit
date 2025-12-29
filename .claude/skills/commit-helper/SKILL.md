@@ -18,7 +18,7 @@ Activate when the user:
 
 ## Instructions
 
-1. **Extract User Prompts**: Look back through the entire conversation history and collect ALL user messages/prompts that led to the changes being committed. Include them in chronological order.
+1. **Extract User Prompts**: Look back through the entire conversation history and collect user messages/prompts that led to the changes being committed. Include them in chronological order.
 
 2. **Analyze Changes**: Run these commands to understand what's being committed:
    ```bash
@@ -27,7 +27,12 @@ Activate when the user:
    ```
    If nothing is staged, run `git diff` to see unstaged changes and ask if the user wants to stage them.
 
-3. **Generate Commit Message**: Create a commit message in this format:
+3. **Get Session ID**: Find the current Claude Code session ID:
+   ```bash
+   ls -t ~/.claude/projects/`pwd | tr '/_' '--'`/[0-9a-f]*.jsonl 2>/dev/null | head -1 | xargs -I{} basename {} .jsonl
+   ```
+
+4. **Generate Commit Message**: Create a commit message in this format:
    ```
    <brief summary of changes>
 
@@ -36,12 +41,14 @@ Activate when the user:
    - "<second user prompt>"
    - ...
 
+   AI-Session-ID: <session-id-from-step-3>
+
    🤖 Generated with [Claude Code](https://claude.com/claude-code)
 
    Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
    ```
 
-4. **Execute Commit**: Use a HEREDOC to ensure proper formatting:
+5. **Execute Commit**: Use a HEREDOC to ensure proper formatting:
    ```bash
    git add -A && git commit -m "$(cat <<'EOF'
    <your commit message here>
@@ -49,9 +56,9 @@ Activate when the user:
    )"
    ```
 
-## Rules
+## Rules for User Prompts
 
-- Include ALL user prompts from this conversation, not just the last one
+- Only include prompts that led to actual file changes (not `/commit` commands or meta-discussion)
 - Keep the summary line under 50 characters
 - Preserve the exact wording of user prompts (can abbreviate very long ones with "...")
 - If there are no changes to commit, inform the user
