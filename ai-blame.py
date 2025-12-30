@@ -7,19 +7,235 @@
 ai-blame: Show AI conversation context for git commits.
 """
 
+import bisect
 import json
 import os
 import re
 import subprocess
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
 import typer
+from rich import box
 from rich.console import Console
 from rich.table import Table
 from rich.text import Text
-from rich import box
+
+
+# --- Data Model ---
+
+
+@dataclass
+class Interaction:
+    """A user prompt with its context from session logs."""
+
+    timestamp: float  # Unix epoch
+    session_id: str
+    prompt: str  # User message content
+    explicit_hashes: list[str] = field(default_factory=list)  # From tool_result
+    files_edited: set[str] = field(default_factory=set)  # From Edit/Write calls
+
+
+@dataclass
+class BlameIndex:
+    """Pre-computed lookup structures."""
+
+    hash_map: dict[str, Interaction] = field(default_factory=dict)  # short_hash → Interaction
+    timeline: list[tuple[float, Interaction]] = field(default_factory=list)  # sorted by timestamp
+    timeline_keys: list[float] = field(default_factory=list)  # for bisect
+
+
+# Regex to extract commit hash from git commit output: [branch hash]
+COMMIT_HASH_PATTERN = re.compile(r"\[[\w\-/]+ ([0-9a-f]{7,})\]")
+
+
+def find_all_session_files(project_dir: Optional[str] = None) -> list[Path]:
+    """Find all session JSONL files for the project."""
+    claude_dir = Path.home() / ".claude" / "projects"
+
+    if project_dir is None:
+        project_dir = get_project_dir()
+
+    project_path = claude_dir / project_dir
+    if not project_path.exists():
+        return []
+
+    return sorted(
+        [f for f in project_path.glob("*.jsonl") if not f.stem.startswith("agent-")],
+        key=lambda f: f.stat().st_mtime,
+    )
+
+
+def extract_hashes_from_entry(entry: dict) -> list[str]:
+    """Extract commit hashes from a session entry (tool_result after git commit)."""
+    hashes = []
+
+    # Check toolUseResult.stdout
+    tool_result = entry.get("toolUseResult", {})
+    if isinstance(tool_result, dict):
+        stdout = tool_result.get("stdout", "")
+        if stdout and isinstance(stdout, str):
+            for match in COMMIT_HASH_PATTERN.finditer(stdout):
+                hashes.append(match.group(1))
+    elif isinstance(tool_result, str):
+        for match in COMMIT_HASH_PATTERN.finditer(tool_result):
+            hashes.append(match.group(1))
+
+    # Also check message.content for tool_result blocks
+    message = entry.get("message", {})
+    content = message.get("content", [])
+    if isinstance(content, list):
+        for item in content:
+            if isinstance(item, dict) and item.get("type") == "tool_result":
+                result_content = item.get("content", "")
+                if isinstance(result_content, str):
+                    for match in COMMIT_HASH_PATTERN.finditer(result_content):
+                        hashes.append(match.group(1))
+
+    return hashes
+
+
+def extract_prompt_text(entry: dict) -> Optional[str]:
+    """Extract user prompt text from a session entry."""
+    message = entry.get("message", {})
+    content = message.get("content", "")
+
+    if isinstance(content, str):
+        if content.startswith("<command-message>"):
+            return None
+        return content.strip() if content.strip() else None
+
+    if isinstance(content, list):
+        texts = []
+        for item in content:
+            if isinstance(item, dict) and item.get("type") == "text":
+                text = item.get("text", "")
+                # Skip system markers
+                if not text.startswith("#") and not text.startswith("<"):
+                    texts.append(text)
+        return "\n".join(texts).strip() if texts else None
+
+    return None
+
+
+def build_index(session_files: list[Path]) -> BlameIndex:
+    """Join all sessions, build lookup structures."""
+    hash_map: dict[str, Interaction] = {}
+    timeline: list[tuple[float, Interaction]] = []
+
+    current_interaction: Optional[Interaction] = None
+
+    for session_file in session_files:
+        session_id = session_file.stem
+
+        try:
+            with open(session_file, "r") as f:
+                for line in f:
+                    try:
+                        entry = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+
+                    entry_type = entry.get("type")
+                    user_type = entry.get("userType")
+                    timestamp_str = entry.get("timestamp", "")
+
+                    # Parse timestamp
+                    try:
+                        ts = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
+                        timestamp = ts.timestamp()
+                    except (ValueError, AttributeError):
+                        continue
+
+                    # User prompt starts a new interaction
+                    if entry_type == "user" and user_type == "external":
+                        prompt_text = extract_prompt_text(entry)
+                        if prompt_text:
+                            current_interaction = Interaction(
+                                timestamp=timestamp,
+                                session_id=session_id,
+                                prompt=prompt_text,
+                                explicit_hashes=[],
+                                files_edited=set(),
+                            )
+                            timeline.append((timestamp, current_interaction))
+
+                    # Assistant response - extract file paths and commit hashes
+                    elif entry_type == "assistant" and current_interaction:
+                        # Extract file paths from Edit/Write
+                        message = entry.get("message", {})
+                        content = message.get("content", [])
+                        if isinstance(content, list):
+                            for item in content:
+                                if isinstance(item, dict) and item.get("type") == "tool_use":
+                                    tool_name = item.get("name", "")
+                                    if tool_name in ("Edit", "Write"):
+                                        file_path = item.get("input", {}).get("file_path", "")
+                                        if file_path:
+                                            current_interaction.files_edited.add(file_path)
+
+                    # Tool result - extract commit hashes
+                    hashes = extract_hashes_from_entry(entry)
+                    if hashes and current_interaction:
+                        for h in hashes:
+                            current_interaction.explicit_hashes.append(h)
+                            hash_map[h] = current_interaction
+
+        except (IOError, OSError):
+            continue
+
+    # Sort timeline and extract keys for bisect
+    timeline.sort(key=lambda x: x[0])
+    timeline_keys = [t for t, _ in timeline]
+
+    return BlameIndex(hash_map=hash_map, timeline=timeline, timeline_keys=timeline_keys)
+
+
+class BlameResolver:
+    """Resolves commits to interactions using priority-based strategy chain."""
+
+    def __init__(self, index: BlameIndex):
+        self.index = index
+        # Priority defined by order - first match wins
+        self.strategies = [
+            self.match_by_hash,  # Priority 1: Direct hash (100% certain)
+            self.match_by_window,  # Priority 2: Time window (high confidence)
+        ]
+
+    def resolve(self, commit_hash: str, commit_timestamp: float) -> tuple[Optional[Interaction], str]:
+        """Resolve commit to interaction. Returns (interaction, method_name)."""
+        for strategy in self.strategies:
+            result = strategy(commit_hash, commit_timestamp)
+            if result:
+                return result, strategy.__name__
+        return None, "none"
+
+    def match_by_hash(self, commit_hash: str, commit_timestamp: float) -> Optional[Interaction]:
+        """O(1) lookup - direct hash from session logs."""
+        # Try both short (7 char) and full hash
+        short_hash = commit_hash[:7]
+        return self.index.hash_map.get(short_hash) or self.index.hash_map.get(commit_hash)
+
+    def match_by_window(self, commit_hash: str, commit_timestamp: float) -> Optional[Interaction]:
+        """O(log n) lookup - prompt immediately before commit."""
+        if not self.index.timeline_keys:
+            return None
+
+        idx = bisect.bisect_right(self.index.timeline_keys, commit_timestamp)
+
+        if idx == 0:
+            return None
+
+        prompt_time, interaction = self.index.timeline[idx - 1]
+        delta = commit_timestamp - prompt_time
+
+        # Prompt must be before commit, within 5 minutes
+        if 0 <= delta <= 300:
+            return interaction
+        return None
+
 
 app = typer.Typer(
     name="ai-blame",
@@ -236,11 +452,21 @@ def format_diff(added: int, deleted: int) -> Text:
     return t
 
 
+def format_timestamp_from_epoch(ts: float) -> str:
+    """Format Unix epoch timestamp to HH:MM."""
+    try:
+        dt = datetime.fromtimestamp(ts)
+        return dt.strftime("%H:%M")
+    except (ValueError, OSError):
+        return ""
+
+
 @app.command()
 def blame(
     commit: str = typer.Argument("HEAD", help="Commit hash or reference"),
     responses: bool = typer.Option(False, "--responses", "-r", help="Include AI responses"),
     all_prompts: bool = typer.Option(False, "--all", "-a", help="Show all prompts from session, not just time-windowed"),
+    project_dir: Optional[str] = typer.Option(None, "--project", "-p", help="Override project directory (encoded path)"),
 ):
     """Show AI conversation context for a git commit."""
     commit_info = get_commit_info(commit)
@@ -248,23 +474,35 @@ def blame(
         console.print(f"[red]Error:[/red] Commit not found: {commit}")
         raise typer.Exit(1)
 
-    session_id = get_commit_session_id(commit)
-    if not session_id:
-        console.print(f"[red]Error:[/red] No AI-Session-ID in commit {commit}")
-        raise typer.Exit(1)
-
-    session_file = find_session_file(session_id)
-    if not session_file:
-        console.print(f"[red]Error:[/red] Session file not found: {session_id}")
-        raise typer.Exit(1)
-
-    # Get time window for this commit
-    commit_time = get_commit_timestamp(commit)
-    prev_commit = get_previous_commit(commit)
-    prev_time = get_commit_timestamp(prev_commit) if prev_commit else None
-
     commit_stats = get_commit_stats(commit)
-    messages = parse_session(session_file, responses)
+    commit_time = get_commit_timestamp(commit)
+    commit_timestamp = commit_time.timestamp() if commit_time else 0.0
+
+    # Try strategy-based resolution first (works without AI-Session-ID)
+    session_files = find_all_session_files(project_dir)
+    interaction: Optional[Interaction] = None
+    match_method = "none"
+
+    if session_files:
+        index = build_index(session_files)
+        resolver = BlameResolver(index)
+        interaction, match_method = resolver.resolve(commit_info["hash"], commit_timestamp)
+
+    # Fallback: Try session ID from commit message (old approach)
+    session_id = get_commit_session_id(commit)
+    session_file: Optional[Path] = None
+    messages: list = []
+
+    if session_id:
+        session_file = find_session_file(session_id)
+        if session_file:
+            messages = parse_session(session_file, responses)
+
+    # If no interaction found and no session file, show error
+    if not interaction and not session_file:
+        console.print(f"[yellow]No AI context found for commit {commit_info['hash'][:8]}[/yellow]")
+        console.print(Text("No session files available or commit not in session logs.", style="dim"))
+        raise typer.Exit(1)
 
     # Header: compact single line
     header = Text()
@@ -275,7 +513,13 @@ def blame(
     header.append(commit_info['author'], style="cyan")
     header.append(f" ({commit_info['date'][:10]})", style="dim")
     console.print(header)
-    console.print(Text(f"Session: {session_id}", style="dim"))
+
+    # Show session/match info
+    if interaction:
+        match_label = "hash" if match_method == "match_by_hash" else "time"
+        console.print(Text(f"Session: {interaction.session_id} (matched by {match_label})", style="dim"))
+    elif session_id:
+        console.print(Text(f"Session: {session_id}", style="dim"))
     console.print()
 
     # Files table: compact, no borders
@@ -298,57 +542,100 @@ def blame(
         console.print(total)
         console.print()
 
-    # Conversation: simple flow, no indentation
+    # Prompts section
     console.print(Text("Prompts", style="bold underline"))
     console.print()
 
     prompt_num = 0
-    for msg in messages:
-        if msg["type"] == "prompt":
-            # Time-based filtering: show prompts between previous commit and this commit
-            if not all_prompts and commit_time:
-                msg_time = parse_timestamp(msg["timestamp"])
-                if msg_time:
-                    # Skip if after this commit
-                    if msg_time > commit_time:
-                        continue
-                    # Skip if before or at previous commit time
-                    if prev_time and msg_time <= prev_time:
-                        continue
 
-            prompt_num += 1
-            time_str = format_time(msg["timestamp"])
+    # If we have a direct interaction match, show it
+    if interaction:
+        prompt_num = 1
+        time_str = format_timestamp_from_epoch(interaction.timestamp)
 
-            # Header line: number and time
-            header = Text()
-            header.append(f"#{prompt_num}", style="dim")
-            header.append(f" {time_str}", style="dim cyan")
-            console.print(header)
+        # Header line: number and time
+        pheader = Text()
+        pheader.append(f"#{prompt_num}", style="dim")
+        pheader.append(f" {time_str}", style="dim cyan")
+        console.print(pheader)
 
-            # Content: plain text, no markup interpretation
-            console.print(Text(msg["content"], style="white"))
+        # Content: plain text
+        console.print(Text(interaction.prompt, style="white"))
 
-            # Files changed (only those in this commit, for reference)
-            files = [f for f in msg.get("files_changed", []) if f in commit_stats]
-            if files:
-                for f in files:
+        # Files edited (only those in this commit)
+        if interaction.files_edited:
+            for f in interaction.files_edited:
+                try:
+                    rel_path = os.path.relpath(f)
+                except ValueError:
+                    rel_path = f
+                if rel_path in commit_stats:
                     file_line = Text()
                     file_line.append("→ ", style="dim")
-                    file_line.append(f, style="bold yellow")
-                    s = commit_stats[f]
+                    file_line.append(rel_path, style="bold yellow")
+                    s = commit_stats[rel_path]
                     file_line.append(f" +{s['added']}", style="bold green")
                     file_line.append(f" -{s['deleted']}", style="bold red")
                     console.print(file_line)
 
-            console.print()
+        console.print()
+        source = f"1 prompt • {interaction.session_id}"
 
-        elif msg["type"] == "response" and responses:
-            time_str = format_time(msg["timestamp"])
-            console.print(Text(f"↳ AI {time_str}", style="dim magenta"))
-            console.print(Text(msg["content"], style="dim"))
-            console.print()
+    # Otherwise, use session-based parsing (old approach)
+    elif messages:
+        prev_commit = get_previous_commit(commit)
+        prev_time = get_commit_timestamp(prev_commit) if prev_commit else None
 
-    console.print(Text(f"{prompt_num} prompts • {session_file}", style="dim"))
+        for msg in messages:
+            if msg["type"] == "prompt":
+                # Time-based filtering: show prompts between previous commit and this commit
+                if not all_prompts and commit_time:
+                    msg_time = parse_timestamp(msg["timestamp"])
+                    if msg_time:
+                        # Skip if after this commit
+                        if msg_time > commit_time:
+                            continue
+                        # Skip if before or at previous commit time
+                        if prev_time and msg_time <= prev_time:
+                            continue
+
+                prompt_num += 1
+                time_str = format_time(msg["timestamp"])
+
+                # Header line: number and time
+                pheader = Text()
+                pheader.append(f"#{prompt_num}", style="dim")
+                pheader.append(f" {time_str}", style="dim cyan")
+                console.print(pheader)
+
+                # Content: plain text, no markup interpretation
+                console.print(Text(msg["content"], style="white"))
+
+                # Files changed (only those in this commit, for reference)
+                files = [f for f in msg.get("files_changed", []) if f in commit_stats]
+                if files:
+                    for f in files:
+                        file_line = Text()
+                        file_line.append("→ ", style="dim")
+                        file_line.append(f, style="bold yellow")
+                        s = commit_stats[f]
+                        file_line.append(f" +{s['added']}", style="bold green")
+                        file_line.append(f" -{s['deleted']}", style="bold red")
+                        console.print(file_line)
+
+                console.print()
+
+            elif msg["type"] == "response" and responses:
+                time_str = format_time(msg["timestamp"])
+                console.print(Text(f"↳ AI {time_str}", style="dim magenta"))
+                console.print(Text(msg["content"], style="dim"))
+                console.print()
+
+        source = f"{prompt_num} prompts • {session_file}"
+    else:
+        source = "No prompts found"
+
+    console.print(Text(source, style="dim"))
 
 
 @app.command()
