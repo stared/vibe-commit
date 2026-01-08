@@ -709,5 +709,87 @@ def list_sessions(
     console.print(table)
 
 
+@app.command()
+def coverage(
+    limit: int = typer.Option(0, "--limit", "-n", help="Max commits to check (0 = all)"),
+    project_dir: Optional[str] = typer.Option(None, "--project", "-p", help="Override project directory"),
+):
+    """Show AI attribution coverage for commits in the repo."""
+    # Get all commits
+    try:
+        result = subprocess.run(
+            ["git", "log", "--format=%H %aI"],
+            capture_output=True, text=True, check=True,
+        )
+    except subprocess.CalledProcessError:
+        console.print("[red]Error:[/red] Not a git repository")
+        raise typer.Exit(1)
+
+    commits_raw = result.stdout.strip().split("\n")
+    if limit > 0:
+        commits_raw = commits_raw[:limit]
+
+    # Build index
+    session_files = find_all_session_files(project_dir)
+    if not session_files:
+        console.print("[yellow]No session files found.[/yellow]")
+        raise typer.Exit(0)
+
+    console.print(f"Building index from {len(session_files)} session files...", style="dim")
+    index = build_index(session_files)
+    resolver = BlameResolver(index)
+
+    stats = {"hash": 0, "time": 0, "none": 0}
+    results: list[tuple[str, str, str]] = []
+
+    for line in commits_raw:
+        if not line.strip():
+            continue
+        parts = line.split(" ", 1)
+        commit_hash = parts[0]
+        commit_date = parts[1] if len(parts) > 1 else ""
+
+        try:
+            ts = datetime.fromisoformat(commit_date)
+            commit_timestamp = ts.timestamp()
+        except (ValueError, AttributeError):
+            commit_timestamp = 0.0
+
+        interaction, method = resolver.resolve(commit_hash, commit_timestamp)
+
+        if method == "match_by_hash":
+            stats["hash"] += 1
+            results.append((commit_hash[:8], "HASH", "bold green"))
+        elif method == "match_by_window":
+            stats["time"] += 1
+            results.append((commit_hash[:8], "TIME", "cyan"))
+        else:
+            stats["none"] += 1
+            results.append((commit_hash[:8], "NONE", "dim"))
+
+    # Summary table
+    total = len(results)
+    console.print()
+
+    table = Table(title=f"Coverage Summary ({total} commits)", box=box.ROUNDED)
+    table.add_column("Match Type", style="white")
+    table.add_column("Count", justify="right")
+    table.add_column("Percent", justify="right")
+
+    table.add_row("Hash match", str(stats["hash"]), f"{100*stats['hash']/total:.1f}%", style="bold green")
+    table.add_row("Time window", str(stats["time"]), f"{100*stats['time']/total:.1f}%", style="cyan")
+    table.add_row("No match", str(stats["none"]), f"{100*stats['none']/total:.1f}%", style="dim")
+
+    matched = stats["hash"] + stats["time"]
+    table.add_row("", "", "", style="dim")
+    table.add_row("Total matched", str(matched), f"{100*matched/total:.1f}%", style="bold white")
+
+    console.print(table)
+
+    # Index stats
+    console.print()
+    console.print(Text(f"Index: {len(index.hash_map)} hashes, {len(index.timeline)} prompts", style="dim"))
+
+
 if __name__ == "__main__":
     app()
