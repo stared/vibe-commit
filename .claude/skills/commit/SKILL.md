@@ -1,6 +1,6 @@
 ---
-name: commit-with-prompts
-description: Automatically includes user prompts in git commit messages. Use when the user mentions committing, wants to commit changes, asks to save their work to git, or says "commit this".
+name: commit
+description: Commit with user prompts from this conversation. Use when user mentions committing, wants to commit changes, asks to save their work to git, or says "commit this".
 allowed-tools: Bash(git:*), Read, Grep
 ---
 
