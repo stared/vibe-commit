@@ -1,0 +1,12 @@
+{
+  "name": "vibe-commit",
+  "owner": "Piotr Migdal",
+  "plugins": [
+    {
+      "name": "vibe-commit",
+      "source": "./",
+      "version": "1.0.0",
+      "description": "Commit with AI session context - includes user prompts and session metadata"
+    }
+  ]
+}

@@ -1,0 +1,8 @@
+{
+  "name": "vibe-commit",
+  "description": "Commit with AI session context - includes user prompts and session metadata",
+  "version": "1.0.0",
+  "author": {
+    "name": "Piotr Migdal"
+  }
+}
