@@ -212,57 +212,28 @@ def format_conversation_for_analysis(conversation: Conversation, include_thinkin
     return "\n".join(lines)
 
 
-ANALYSIS_PROMPT = """Analyze this Claude Code conversation and extract insights in the following format:
+ANALYSIS_PROMPT = """Analyze this Claude Code conversation. Output concise Markdown that can directly improve a CLAUDE.md instructions file.
 
-## Analysis
+## Format
 
-```json
-{
-  "performance_calibration": {
-    "explicit_corrections": [
-      {"quote": "user quote showing correction", "context": "brief context", "severity": "minor|moderate|major"}
-    ],
-    "re_explanations": [
-      {"quote": "user quote re-explaining", "what_was_misunderstood": "brief description"}
-    ],
-    "frustration_signals": [
-      {"quote": "user quote showing frustration", "type": "exasperation|impatience|disappointment|confusion"}
-    ],
-    "abandoned_approaches": [
-      {"description": "what was abandoned and why"}
-    ],
-    "successes": [
-      {"description": "what worked well", "user_signal": "positive feedback if any"}
-    ]
-  },
-  "user_preferences": {
-    "technical_choices": [
-      {"preference": "description", "evidence": "quote or observation"}
-    ],
-    "communication_style": [
-      {"preference": "description", "evidence": "quote or observation"}
-    ],
-    "workflow_patterns": [
-      {"pattern": "description", "evidence": "quote or observation"}
-    ],
-    "quality_standards": [
-      {"standard": "what they consider good/comprehensive", "evidence": "quote or observation"}
-    ]
-  },
-  "user_treatment_of_ai": {
-    "tone": "overall tone description",
-    "trust_level": "low|medium|high with explanation",
-    "delegation_style": "micromanaging|collaborative|hands-off",
-    "notable_behaviors": [
-      {"behavior": "description", "quote": "supporting quote if available"}
-    ]
-  }
-}
-```
+### What went wrong
+Bullet points of AI mistakes, misunderstandings, or rejected approaches. Include the user's correction. Be specific.
 
-## Other
+### User preferences
+Concrete rules the AI should follow for this user. Write as direct instructions (e.g., "Use uv, not python3"). Only include things with clear evidence.
 
-Any additional observations that don't fit the categories above but seem valuable for understanding this user-AI interaction.
+### What worked well
+Brief notes on successful interactions worth reinforcing.
+
+### Other observations
+Anything else relevant for calibrating AI behavior with this user.
+
+## Rules
+- No JSON, no classifications, no scores
+- Dense, actionable information only
+- Quote user when it adds clarity
+- Skip sections if empty
+- **DO NOT FABRICATE**: Only state what the user explicitly said. If user said "don't use X", write "don't use X" - do NOT invent "use Y instead" unless Y was explicitly mentioned. Never invent tool names, model names, versions, or alternatives.
 
 ---
 
